@@ -1,0 +1,5 @@
+const cities = {
+  tehran: { name: 'تهران', lat: 35.6892, lon: 51.3890 },
+  mashhad: { name: 'مشهد', lat: 36.2605, lon: 59.6168 },
+  shiraz: { name: 'شیراز', lat: 29.5918, lon: 52.5837 },
+};

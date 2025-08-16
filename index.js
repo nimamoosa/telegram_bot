@@ -1,6 +1,7 @@
 import { Telegraf } from "telegraf";
 import { Level } from "level";
-import nodeCron from "node-cron";
+import axios from "axios";
+import { message } from "telegraf/filters";
 
 const db = new Level("database", {
   keyEncoding: "json",
@@ -9,47 +10,84 @@ const db = new Level("database", {
 
 const app = new Telegraf("8377021132:AAH5of3dEo9jClCWE2YrOM0Tn6JTqg8F8Ww");
 
-const loadReminders = async () => {
-  for await (const key of db.keys()) {
-    const description = await db.get(key);
-    const userId = key.split("-")[0];
-    const [h, m] = key.split("-").slice(1).join("").split(":");
+const responseCity = async (city) => {
+  try {
+    const response = await axios.get(
+      "https://geocoding-api.open-meteo.com/v1/search",
+      {
+        params: {
+          name: city,
+          count: 1,
+          language: "fa",
+        },
+      }
+    );
 
-    nodeCron.schedule(`${m} ${h} * * *`, async () => {
-      await db.del(key);
-      await app.telegram.sendMessage(userId, description);
-    });
+    const { latitude, longitude } = response.data.results[0];
+
+    return { ok: true, message: "success", data: { latitude, longitude } };
+  } catch (error) {
+    console.log(error);
+    return { ok: false, message: "error to get data", data: null };
   }
-
-  console.log("Load all reminder");
 };
 
-app.command("reminder", async (ctx) => {
-  const parts = ctx.message.text.split(" ");
+const responseCityInfo = async (city, lat, lon, ctx, edited_message_id) => {
+  try {
+    const response = await axios.get("https://api.open-meteo.com/v1/forecast", {
+      params: {
+        latitude: lat,
+        longitude: lon,
+        current_weather: true,
+      },
+    });
 
-  const time = parts[1];
-  const message = parts.slice(2).join(" ");
+    const { timezone_abbreviation } = await response.data;
+    const { time, temperature, windspeed } = await response.data
+      .current_weather;
 
-  const key = `${ctx.from.id}-${time}`;
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      edited_message_id,
+      undefined,
+      `مشخصات آب و هوای شهر ${city}\n\nدما: ${temperature}\nسرعت باد: ${windspeed}\nتایم زون منطقه: ${timezone_abbreviation}\n\nآخرین بروزرسانی: ${time}`
+    );
+  } catch (error) {
+    await ctx.reply(
+      error.response?.data?.message ?? "مشکلی در گرفتن مشخصات شهر شما پیش آمد!"
+    );
+  }
+};
 
-  const findTime = await db.get(key);
+app.on(message("text"), async (ctx, next) => {
+  const message = ctx.message.text;
+  const city = message.split(" ")[1];
 
-  if (findTime) {
-    return ctx.reply("این تایم از قبل رزرو شده است!");
+  if (!message.includes("هواشناسی")) return next();
+  if (!city) return next();
+
+  const { message_id } = await ctx.reply("در حال گرفتن مشخصات شهر شما....");
+
+  const resCity = await responseCity(city);
+
+  if (!resCity.ok) {
+    return ctx.telegram.editMessageText(
+      ctx.chat.id,
+      message_id,
+      null,
+      resCity.message
+    );
   }
 
-  await db.put(key, message);
-  ctx.reply("این زمان با موفقیت رزرو شد!");
-
-  const [h, m] = time.split(":");
-
-  nodeCron.schedule(`${m} ${h} * * *`, async () => {
-    await app.telegram.sendMessage(ctx.chat.id, message);
-    await db.del(key);
-  });
+  return await responseCityInfo(
+    city,
+    resCity.data.latitude,
+    resCity.data.longitude,
+    ctx,
+    message_id
+  );
 });
 
 app.launch(() => {
   console.log("Bot Run");
-  loadReminders();
 });
